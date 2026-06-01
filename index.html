@@ -276,6 +276,19 @@ function switchTab(t) {
   document.getElementById('tab-'+t).classList.add('active');
   document.getElementById('panel-'+t).classList.add('active');
   if (t==='log') renderLog();
+  if (t==='setup') {
+    const n = parseInt(localStorage.getItem('mtlvc_quote_seq') || '0');
+    document.getElementById('seqDisplay').textContent = 'LVC-' + String(n).padStart(3,'0') + ' (next will be LVC-' + String(n+1).padStart(3,'0') + ')';
+  }
+}
+
+function setSeq() {
+  const val = parseInt(document.getElementById('seqOverride').value);
+  if (isNaN(val) || val < 0) { showToast('Enter a valid number'); return; }
+  localStorage.setItem('mtlvc_quote_seq', String(val));
+  const n = val;
+  document.getElementById('seqDisplay').textContent = 'LVC-' + String(n).padStart(3,'0') + ' (next will be LVC-' + String(n+1).padStart(3,'0') + ')';
+  showToast('Counter set to ' + val);
 }
 
 // ─── Markup ───────────────────────────────────────────────
@@ -410,8 +423,11 @@ function parseRhombus(raw) {
     console.log(`✓ Line item sum (${sumCheck}) matches Rhombus SubTotal (${rhSub})`);
   }
 
+  const rhombusRep = (text.match(/Prepared\s*By[:\s]+([^\n]+?)(?=\s{2,}|Contact|Prepared\s*Email|$)/i) || [])[1] || '';
+
   return { items, shipping, rhombusSubtotal, quoteNum,
-           custName: custName.trim(), custAddr, custContact: custContact.trim() };
+           custName: custName.trim(), custAddr, custContact: custContact.trim(),
+           rhombusRep: rhombusRep.trim() };
 }
 
 function parseDollar(s) { return parseFloat(String(s||'0').replace(/,/g,'')) || 0; }
@@ -420,7 +436,8 @@ function prefill(d) {
   if (d.custName)    document.getElementById('custName').value    = d.custName;
   if (d.custContact) document.getElementById('custContact').value = d.custContact;
   if (d.custAddr)    document.getElementById('custAddr').value    = d.custAddr;
-  if (d.quoteNum)    document.getElementById('quoteNum').value    = d.quoteNum.replace(/[^A-Z0-9\-]/gi,'');
+  // Always assign the next sequential LVC number
+  document.getElementById('quoteNum').value = nextQuoteNum();
 }
 
 // ─── Render items + totals ────────────────────────────────
@@ -483,8 +500,9 @@ function getQuoteData() {
   const custSubtotal = round2(items.reduce((s,i) => s + round2(i.totalCost * factor), 0));
   const custTotal    = round2(custSubtotal + shipping);
   const margin       = round2(custSubtotal - rhombusSubtotal);
+  const rhombusRep = parsedData.rhombusRep || '';
   return { items, shipping, rhombusSubtotal, factor, custSubtotal, custTotal, margin,
-           custName, custContact, custAddr, quoteNum, quoteDate, notes, markup };
+           custName, custContact, custAddr, quoteNum, quoteDate, notes, markup, rhombusRep };
 }
 
 // ─── PDF: Customer Quote ──────────────────────────────────
@@ -495,21 +513,25 @@ function generateQuote() {
   const doc = new jsPDF({unit:'pt',format:'letter'});
   const W=612, L=792; let y=0;
 
-  // Header
-  doc.setFillColor(0,201,177); doc.rect(0,0,W,58,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.setTextColor(0,0,0);
-  doc.text('LOW VOLTAGE COMMUNICATIONS LLC',40,35);
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-  doc.text('Tanner Beree  ·  PO Box 288, Alberton, MT 59820  ·  (406) 880-8777  ·  tanner@mtlvc.com',40,50);
+  // Header: logo + company info
+  const logoB64 = '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';
+  try { doc.addImage('data:image/png;base64,'+logoB64,'PNG',40,10,38,44); } catch(e){}
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(10,10,10);
+  doc.text('LOW VOLTAGE COMMUNICATIONS LLC',90,26);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(80,80,80);
+  doc.text('Tanner Beree  \u00b7  PO Box 288, Alberton, MT 59820',90,38);
+  doc.text('(406) 880-8777  \u00b7  tanner@mtlvc.com',90,49);
+  doc.setDrawColor(0,201,177); doc.setLineWidth(2);
+  doc.line(40,62,W-40,62); doc.setLineWidth(0.5); doc.setDrawColor(220,220,220);
 
   y=82;
   doc.setTextColor(20,20,20); doc.setFont('helvetica','bold'); doc.setFontSize(14);
   doc.text('CUSTOMER QUOTE',40,y);
   doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(80,80,80);
-  doc.text(`Quote #: ${d.quoteNum}`,W-40,y,{align:'right'});
-  doc.text(`Date: ${fmtDate(d.quoteDate)}`,W-40,y+14,{align:'right'});
+  doc.text('Quote #: '+d.quoteNum,W-40,y,{align:'right'});
+  doc.text('Date: '+fmtDate(d.quoteDate),W-40,y+14,{align:'right'});
 
-  y+=32; doc.setDrawColor(220,220,220); doc.line(40,y,W-40,y); y+=16;
+  y+=32; doc.line(40,y,W-40,y); y+=16;
 
   doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(120,120,120);
   doc.text('PREPARED FOR',40,y); y+=13;
@@ -521,16 +543,61 @@ function generateQuote() {
     doc.splitTextToSize(d.custAddr,260).forEach(l=>{doc.text(l,40,y);y+=12;});
   }
 
-  y+=14; doc.line(40,y,W-40,y); y+=18;
+  y+=14; doc.line(40,y,W-40,y); y+=16;
+
+  // Vendor / Ship To two-column block
+  const col1=40, col2=W/2+10;
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(120,120,120);
+  doc.text('VENDOR',col1,y); doc.text('SHIP TO',col2,y); y+=11;
+
+  // Vendor left col
+  const vendorLines = [
+    {label:'NAME',    val: d.rhombusRep || 'Kamryn San Nicolas'},
+    {label:'COMPANY', val: 'Rhombus Systems, Inc.'},
+    {label:'ADDRESS', val: '1610 R Street Suite 350, Sacramento, CA 95811'},
+    {label:'PHONE',   val: '650.425.3452'},
+  ];
+  // Ship To right col
+  const shipLines = [
+    {label:'NAME',    val: d.custContact || ''},
+    {label:'COMPANY', val: d.custName},
+    {label:'ADDRESS', val: d.custAddr},
+    {label:'PHONE',   val: ''},
+  ];
+
+  let vy = y;
+  vendorLines.forEach(row => {
+    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(140,140,140);
+    doc.text(row.label, col1, vy);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(30,30,30);
+    const wrapped = doc.splitTextToSize(row.val, W/2-20);
+    wrapped.forEach((l,i) => doc.text(l, col1, vy+9+i*10));
+    vy += 10 + (wrapped.length-1)*10 + 6;
+  });
+
+  let sy = y;
+  shipLines.forEach(row => {
+    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(140,140,140);
+    doc.text(row.label, col2, sy);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(30,30,30);
+    if (row.val) {
+      const wrapped = doc.splitTextToSize(row.val, W/2-20);
+      wrapped.forEach((l,i) => doc.text(l, col2, sy+9+i*10));
+      sy += 10 + (wrapped.length-1)*10 + 6;
+    } else { sy += 16; }
+  });
+
+  y = Math.max(vy, sy) + 8;
+  doc.setDrawColor(220,220,220); doc.line(40,y,W-40,y); y+=16;
 
   // Table header
-  doc.setFillColor(240,240,240); doc.rect(40,y-13,W-80,20,'F');
+  doc.setFillColor(240,240,240); doc.rect(40,y-15,W-80,22,'F');
   doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(80,80,80);
   doc.text('PRODUCT CODE',50,y);
   doc.text('QTY',265,y,{align:'center'});
   doc.text('UNIT PRICE',390,y,{align:'right'});
   doc.text('LINE TOTAL',W-50,y,{align:'right'});
-  y+=8;
+  y+=10;
 
   doc.setFont('helvetica','normal'); doc.setFontSize(10);
   d.items.forEach((item,idx)=>{
@@ -544,7 +611,7 @@ function generateQuote() {
     y+=20;
   });
 
-  y+=10; doc.setDrawColor(220,220,220); doc.line(40,y,W-40,y); y+=16;
+  y+=10; doc.line(40,y,W-40,y); y+=16;
 
   const tx=370,vx=W-50;
   doc.setTextColor(80,80,80); doc.setFontSize(10);
@@ -562,21 +629,38 @@ function generateQuote() {
     doc.splitTextToSize(d.notes,W-80).forEach(l=>{doc.text(l,40,y);y+=12;}); y+=8;
   }
 
-  y+=8; doc.line(40,y,W-40,y); y+=14;
-  doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(120,120,120);
-  doc.text('PAYMENT & TERMS',40,y); y+=12;
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(90,90,90);
-  doc.splitTextToSize('Payment due within 15 days of invoice date. All hardware and licensing subject to Rhombus Systems standard warranty. Title and risk of loss transfer upon shipment. Electronic acceptance is binding.',W-80).forEach(l=>{doc.text(l,40,y);y+=11;});
+  // Acceptance and Payment Terms
+  y+=8; doc.setDrawColor(220,220,220); doc.line(40,y,W-40,y); y+=14;
+  doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(30,30,30);
+  doc.text('Acceptance and Payment Terms',40,y); y+=13;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(60,60,60);
+  const termsText = [
+    'This quote (\u201cOrder\u201d) is issued by Low Voltage Communications LLC (\u201cwe,\u201d \u201cus,\u201d or \u201cProvider\u201d) to the customer',
+    'identified above (\u201cyou\u201d or \u201cClient\u201d).',
+    '',
+    'By accepting this quote\u2014either by written approval or through payment\u2014you acknowledge and agree to the',
+    'following terms:',
+    '- Payment is due in full within 15 days of the invoice date.',
+    '- All hardware and licenses listed in this quote are provided as-is from Rhombus Systems, and are subject to',
+    "  Rhombus' standard warranty and support policies.",
+    '- Title and risk of loss transfer to Client upon shipment from Rhombus Systems.',
+    '',
+    'By accepting this Order, the Client confirms they are authorized to proceed and agree to the terms stated above.',
+    'Electronic acceptance (email confirmation, e-signature, or payment) is binding.',
+    'The parties, acting through their authorized officers, hereby execute this Agreement.'
+  ];
+  termsText.forEach(line => { doc.text(line, 40, y); y += 10; });
 
-  y=L-80; doc.line(40,y,220,y); doc.line(W-220,y,W-40,y);
-  doc.setFontSize(8); doc.setTextColor(140,140,140);
-  doc.text('Customer Signature',40,y+12); doc.text('Date',W-220,y+12);
+  // Signature block
+  y += 18;
+  doc.setDrawColor(100,100,100);
+  doc.line(40,y,240,y);
+  doc.line(W-180,y,W-40,y);
+  doc.setFontSize(8); doc.setTextColor(100,100,100);
+  doc.text('Signature',40,y+11);
+  doc.text('Date',W-180,y+11);
 
-  doc.setFillColor(10,10,10); doc.rect(0,L-28,W,28,'F');
-  doc.setTextColor(0,201,177); doc.setFontSize(8);
-  doc.text('Low Voltage Communications LLC  ·  Authorized Rhombus Reseller',W/2,L-10,{align:'center'});
-
-  doc.save(`MTLVC_Quote_${d.quoteNum}_${d.custName.replace(/\s+/g,'_')}.pdf`);
+  doc.save('MTLVC_Quote_'+d.quoteNum+'_'+d.custName.replace(/\s+/g,'_')+'.pdf');
   showToast('Customer quote saved!');
 }
 
@@ -663,6 +747,12 @@ function generatePO() {
 
 // ─── Deal Log ─────────────────────────────────────────────
 function getDeals() { try{return JSON.parse(localStorage.getItem('mtlvc_deals')||'[]');}catch{return[];} }
+
+function nextQuoteNum() {
+  const n = parseInt(localStorage.getItem('mtlvc_quote_seq') || '0') + 1;
+  localStorage.setItem('mtlvc_quote_seq', String(n));
+  return 'LVC-' + String(n).padStart(3, '0');
+}
 function saveDeals(d) { localStorage.setItem('mtlvc_deals',JSON.stringify(d)); }
 
 async function saveDeal() {
