@@ -386,7 +386,8 @@ function parseRhombus(raw) {
   const custName    = (text.match(/End\s*User[:\s]+([^\n]+?)(?=\s{2,}|Ship\s*To|Bill|$)/i) || [])[1] || '';
   const shipTo      = (text.match(/Ship\s*To[:\s]+(.+?)(?=Shipping\s*Method|Contact\s*Name|Prepared\s*By|$)/is) || [])[1] || '';
   const custAddr    = shipTo.replace(/\s+/g,' ').trim();
-  const custContact = (text.match(/Contact\s*Name[:\s]+(.+?)(?=\s{2,}|Email|$)/i) || [])[1] || '';
+  let custContact = (text.match(/Contact\s*Name[:\s]+(.+?)(?=\s{2,}|Email|Prepared|$)/i) || [])[1] || '';
+  if (/^prepared/i.test(custContact.trim())) custContact = '';
 
   // ── Totals ────────────────────────────────────────────────
   const shipping        = parseDollar((text.match(/Shipping\s*Amount[:\s]+\$?([\d,]+\.?\d*)/i) || [])[1] || '0');
